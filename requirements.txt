@@ -1,0 +1,7 @@
+pyrogram==2.0.106
+# TgCrypto==1.2.5
+python-dotenv==1.0.0
+psutil==5.9.6
+aiofiles==23.2.1
+# Docker health check support
+healthcheck==1.3.3
