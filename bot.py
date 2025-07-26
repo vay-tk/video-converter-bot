@@ -1,4 +1,3 @@
-
 import logging
 import os
 from pathlib import Path
@@ -134,18 +133,25 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
     progress_message = None
     input_file = None
     output_file = None
+    last_progress_text = ""
     
     try:
         # Download progress callback
         async def download_progress(current, total):
-            nonlocal progress_message
+            nonlocal progress_message, last_progress_text
             percent = (current * 100) / total
-            if progress_message is None or percent % 10 < 1:  # Update every 10%
-                text = f"📥 **Downloading**: {percent:.1f}%"
-                if progress_message is None:
-                    progress_message = await callback_query.edit_message_text(text)
-                else:
-                    await progress_message.edit_text(text)
+            text = f"📥 **Downloading**: {percent:.1f}%"
+            
+            # Only update if text changed and enough time passed
+            if text != last_progress_text:
+                try:
+                    if progress_message is None:
+                        progress_message = await callback_query.edit_message_text(text)
+                    else:
+                        await progress_message.edit_text(text)
+                    last_progress_text = text
+                except Exception:
+                    pass  # Ignore edit errors
         
         # Download file
         input_file = await file_manager.download_file(message, download_progress)
@@ -160,18 +166,23 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
         # Get video duration for progress tracking
         duration = await converter.get_video_duration(input_file)
         
-        # Conversion progress callback
-        async def conversion_progress(current_seconds):
-            if duration and current_seconds > 0:
-                percent = min((current_seconds / duration) * 100, 100)
-                text = f"🔄 **Converting to {format_type.upper()}**: {percent:.1f}%"
+        # Conversion progress callback with ETA
+        async def conversion_progress(percent, current_seconds, eta_text):
+            nonlocal last_progress_text
+            text = f"🔄 **Converting to {format_type.upper()}**: {percent:.1f}%{eta_text}"
+            
+            # Only update if text changed significantly
+            if text != last_progress_text:
                 try:
                     await progress_message.edit_text(text)
-                except:
-                    pass  # Ignore rate limit errors
+                    last_progress_text = text
+                except Exception:
+                    pass  # Ignore MESSAGE_NOT_MODIFIED and other edit errors
         
         # Update status
-        await progress_message.edit_text(f"🔄 **Converting to {format_type.upper()}**...")
+        initial_text = f"🔄 **Converting to {format_type.upper()}**..."
+        await progress_message.edit_text(initial_text)
+        last_progress_text = initial_text
         
         # Convert video
         if format_type == "mp4":
@@ -184,7 +195,9 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
             return False
         
         # Upload result
-        await progress_message.edit_text("📤 **Uploading converted video...**")
+        upload_text = "📤 **Uploading converted video...**"
+        if upload_text != last_progress_text:
+            await progress_message.edit_text(upload_text)
         
         # Send converted file
         original_filename = message.video.file_name if message.video else message.document.file_name
@@ -205,7 +218,10 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
     except Exception as e:
         logger.error(f"Conversion process error: {e}")
         if progress_message:
-            await progress_message.edit_text("❌ Conversion failed due to an error.")
+            try:
+                await progress_message.edit_text("❌ Conversion failed due to an error.")
+            except:
+                pass
         return False
     
     finally:

@@ -33,12 +33,16 @@ class FileManager:
             file_name = getattr(file_info, 'file_name', f"video_{file_info.file_id}.mp4")
             temp_path = self.get_temp_path(file_name, "_input")
             
+            logger.info(f"Starting download: {file_name}")
+            
             await message.download(
                 file_name=str(temp_path),
                 progress=progress_callback
             )
             
+            logger.info(f"Download completed: {temp_path}")
             return temp_path
+            
         except Exception as e:
             logger.error(f"Download failed: {e}")
             return None
