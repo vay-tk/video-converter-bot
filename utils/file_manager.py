@@ -2,6 +2,7 @@
 import os
 import asyncio
 import aiofiles
+import time
 from pathlib import Path
 from typing import Optional
 import logging
@@ -21,7 +22,7 @@ class FileManager:
         return self.temp_dir / temp_filename
     
     async def download_file(self, message, progress_callback=None) -> Optional[Path]:
-        """Download file from Telegram message"""
+        """Download file from Telegram message with throttled progress updates"""
         try:
             if message.video:
                 file_info = message.video
@@ -35,9 +36,25 @@ class FileManager:
             
             logger.info(f"Starting download: {file_name}")
             
+            # Wrapper to throttle progress updates
+            last_callback_time = 0
+            
+            async def throttled_progress(current, total):
+                nonlocal last_callback_time
+                
+                if progress_callback:
+                    current_time = time.time()
+                    # Only call the callback every 5 seconds or at completion
+                    if (current_time - last_callback_time >= 5 or 
+                        current == total or 
+                        last_callback_time == 0):
+                        
+                        await progress_callback(current, total)
+                        last_callback_time = current_time
+            
             await message.download(
                 file_name=str(temp_path),
-                progress=progress_callback
+                progress=throttled_progress if progress_callback else None
             )
             
             logger.info(f"Download completed: {temp_path}")

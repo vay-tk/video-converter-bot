@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-import time
+from pyrogram.errors import FloodWait, MessageNotModified
 
 from config import Config
 from utils.file_manager import FileManager
@@ -139,26 +140,47 @@ async def handle_conversion(client: Client, callback_query: CallbackQuery):
         await callback_query.edit_message_text("❌ Conversion failed. Please try again.")
 
 async def process_conversion(client: Client, callback_query: CallbackQuery, message: Message, format_type: str):
-    """Process video conversion with proper progress tracking"""
+    """Process video conversion with proper progress tracking and rate limit handling"""
     progress_message = None
     input_file = None
     output_file = None
     last_progress_text = ""
+    last_update_time = 0
     
     try:
-        # Download progress callback
+        # Download progress callback with rate limiting
         async def download_progress(current, total):
-            nonlocal progress_message, last_progress_text
-            percent = (current * 100) / total
-            text = f"📥 **Downloading**: {percent:.1f}%"
+            nonlocal progress_message, last_progress_text, last_update_time
             
-            if text != last_progress_text:
+            current_time = time.time()
+            percent = (current * 100) / total
+            
+            # Only update every 10% or every 15 seconds to avoid rate limits
+            should_update = (
+                abs(percent - (float(last_progress_text.split(': ')[1].split('%')[0]) if ': ' in last_progress_text and '%' in last_progress_text else 0)) >= 10 or
+                current_time - last_update_time >= 15
+            )
+            
+            if should_update:
+                text = f"📥 **Downloading**: {percent:.1f}%"
+                
                 try:
                     if progress_message is None:
                         progress_message = await callback_query.edit_message_text(text)
                     else:
                         await progress_message.edit_text(text)
+                    
                     last_progress_text = text
+                    last_update_time = current_time
+                    logger.info(f"Download progress: {percent:.1f}%")
+                    
+                except FloodWait as e:
+                    logger.warning(f"Download progress flood wait: {e.value}s")
+                    # Don't wait, just skip this update
+                    pass
+                except MessageNotModified:
+                    # Message content hasn't changed, ignore
+                    pass
                 except Exception as e:
                     logger.debug(f"Download progress update error: {e}")
         
@@ -166,41 +188,53 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
         logger.info("Starting file download...")
         input_file = await file_manager.download_file(message, download_progress)
         if not input_file:
-            await callback_query.edit_message_text("❌ Failed to download video.")
+            await safe_edit_message(callback_query, "❌ Failed to download video.")
             return False
         
         # Prepare output file
         original_name = Path(input_file.name).stem
         output_file = file_manager.get_temp_path(f"{original_name}.{format_type}", "_output")
         
-        # Conversion progress callback - WITH MORE DEBUG LOGGING
+        # Conversion progress callback with better rate limiting
         async def conversion_progress(percent, current_seconds, eta_text):
-            nonlocal last_progress_text, progress_message
+            nonlocal last_progress_text, progress_message, last_update_time
             
-            # Format the progress text
+            current_time = time.time()
             text = f"🔄 **Converting to {format_type.upper()}**: {percent:.1f}%{eta_text}"
             
-            logger.info(f"PROGRESS CALLBACK TRIGGERED: {percent}% - {text}")  # Enhanced debug log
+            # Update every 5% or every 30 seconds for conversion
+            should_update = (
+                abs(percent - (float(last_progress_text.split(': ')[1].split('%')[0]) if ': ' in last_progress_text and '%' in last_progress_text else 0)) >= 5 or
+                current_time - last_update_time >= 30
+            )
             
-            # Only update if text changed significantly (more than 1% difference)
-            if abs(percent - float(last_progress_text.split(':')[1].split('%')[0] if ':' in last_progress_text and '%' in last_progress_text else 0)) >= 1:
+            if should_update and text != last_progress_text:
                 try:
                     await progress_message.edit_text(text)
                     last_progress_text = text
-                    logger.info(f"MESSAGE UPDATED: {text}")
+                    last_update_time = current_time
+                    logger.info(f"Conversion progress: {percent:.1f}%")
+                    
+                except FloodWait as e:
+                    logger.warning(f"Conversion progress flood wait: {e.value}s")
+                    # Don't wait, just skip this update
+                    pass
+                except MessageNotModified:
+                    pass
                 except Exception as e:
                     logger.error(f"Progress update failed: {e}")
         
         # Update initial conversion status
         initial_text = f"🔄 **Converting to {format_type.upper()}**... (Analyzing video)"
-        await progress_message.edit_text(initial_text)
+        await safe_edit_message(progress_message, initial_text)
         last_progress_text = initial_text
+        last_update_time = time.time()
         
         logger.info(f"STARTING CONVERSION: {format_type}")
         logger.info(f"INPUT FILE: {input_file}")
         logger.info(f"OUTPUT FILE: {output_file}")
         
-        # Convert video - ENSURE CALLBACK IS DEFINITELY PASSED
+        # Convert video
         logger.info("CALLING CONVERTER WITH PROGRESS CALLBACK")
         if format_type == "mp4":
             success = await converter.convert_to_mp4(input_file, output_file, conversion_progress)
@@ -210,13 +244,12 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
         logger.info(f"CONVERSION COMPLETED: success={success}")
         
         if not success:
-            await progress_message.edit_text("❌ Conversion failed.")
+            await safe_edit_message(progress_message, "❌ Conversion failed.")
             return False
         
         # Upload result
         upload_text = "📤 **Uploading converted video...**"
-        if upload_text != last_progress_text:
-            await progress_message.edit_text(upload_text)
+        await safe_edit_message(progress_message, upload_text)
         
         # Send converted file
         original_filename = message.video.file_name if message.video else message.document.file_name
@@ -230,15 +263,26 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
         )
         
         # Update final message
-        await progress_message.edit_text("✅ **Video converted and sent successfully!**")
+        await safe_edit_message(progress_message, "✅ **Video converted and sent successfully!**")
         
         return True
+        
+    except FloodWait as e:
+        logger.error(f"Flood wait in conversion process: {e.value}s")
+        if progress_message:
+            try:
+                # Wait for the flood wait period
+                await asyncio.sleep(e.value)
+                await progress_message.edit_text("⚠️ **Processing paused due to rate limits. Resuming...**")
+            except:
+                pass
+        return False
         
     except Exception as e:
         logger.error(f"Conversion process error: {e}")
         if progress_message:
             try:
-                await progress_message.edit_text("❌ Conversion failed due to an error.")
+                await safe_edit_message(progress_message, "❌ Conversion failed due to an error.")
             except:
                 pass
         return False
@@ -249,6 +293,37 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
             file_manager.cleanup_file(input_file)
         if output_file:
             file_manager.cleanup_file(output_file)
+
+async def safe_edit_message(message_or_query, text: str, max_retries: int = 3):
+    """Safely edit message with flood wait handling"""
+    for attempt in range(max_retries):
+        try:
+            if hasattr(message_or_query, 'edit_message_text'):
+                # It's a callback query
+                return await message_or_query.edit_message_text(text)
+            else:
+                # It's a message
+                return await message_or_query.edit_text(text)
+                
+        except FloodWait as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Flood wait on message edit (attempt {attempt + 1}): waiting {e.value}s")
+                await asyncio.sleep(e.value)
+            else:
+                logger.error(f"Max retries reached for message edit after flood wait")
+                raise
+                
+        except MessageNotModified:
+            # Message content is the same, that's fine
+            return message_or_query
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Message edit failed (attempt {attempt + 1}): {e}")
+                await asyncio.sleep(2)
+            else:
+                logger.error(f"Failed to edit message after {max_retries} attempts: {e}")
+                raise
 
 @app.on_message(filters.command("help"))
 async def help_command(client: Client, message: Message):
