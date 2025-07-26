@@ -14,6 +14,12 @@ class Config:
     
     # FFmpeg
     FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+    FFMPEG_THREAD_QUEUE_SIZE = int(os.getenv("FFMPEG_THREAD_QUEUE_SIZE", "512"))
+    
+    # Progress update intervals
+    PROGRESS_UPDATE_INTERVAL = 10  # seconds - reduce frequency for long conversions
+    PROGRESS_CHECK_INTERVAL = 30  # Check progress every 30 seconds
+    ETA_CALCULATION_THRESHOLD = 60  # Start ETA calculation after 60 seconds
     
     # Validation
     @classmethod
@@ -22,4 +28,4 @@ class Config:
             raise ValueError("Missing required environment variables")
         
         if not os.path.exists(cls.TEMP_DIR):
-            os.makedirs(cls.TEMP_DIR)
+            os.makedirs(cls.TEMP_DIR, exist_ok=True)
