@@ -21,6 +21,10 @@ class Config:
     PROGRESS_CHECK_INTERVAL = 30  # Check progress every 30 seconds
     ETA_CALCULATION_THRESHOLD = 60  # Start ETA calculation after 60 seconds
     
+    # Session management
+    SESSION_STRING_NAME = os.getenv("SESSION_STRING_NAME", "video_converter_session")
+    FLOOD_WAIT_HANDLE = os.getenv("FLOOD_WAIT_HANDLE", "true").lower() == "true"
+    
     # Validation
     @classmethod
     def validate(cls):

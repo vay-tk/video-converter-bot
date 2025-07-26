@@ -24,7 +24,16 @@ logger = logging.getLogger(__name__)
 
 # Initialize components
 Config.validate()
-app = Client("video_converter_bot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN)
+
+# Use session name to persist sessions and avoid repeated auth
+app = Client(
+    Config.SESSION_STRING_NAME,
+    api_id=Config.API_ID, 
+    api_hash=Config.API_HASH, 
+    bot_token=Config.BOT_TOKEN,
+    workdir="/app"  # Store session files in app directory
+)
+
 file_manager = FileManager(Config.TEMP_DIR)
 converter = FFmpegConverter(Config.FFMPEG_PATH)
 
