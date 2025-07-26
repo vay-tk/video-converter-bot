@@ -1,28 +1,29 @@
 # Multi-stage build for optimized image size
-FROM python:3.11-slim as builder
+FROM python:3.11-alpine as builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
+# Install build dependencies with minimal packages
+RUN apk add --no-cache \
     gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+    musl-dev \
+    linux-headers \
+    && rm -rf /var/cache/apk/*
 
-# Install Python dependencies
+# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Production stage
-FROM python:3.11-slim
+# Production stage - use Alpine for efficiency
+FROM python:3.11-alpine
 
 # Install runtime dependencies including FFmpeg
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     ffmpeg \
-    ffprobe \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    ffmpeg-dev \
+    su-exec \
+    && rm -rf /var/cache/apk/*
 
 # Create non-root user for security
-RUN useradd --create-home --shell /bin/bash --user-group --uid 1000 botuser
+RUN adduser -D -s /bin/sh -u 1000 botuser
 
 # Set working directory
 WORKDIR /app
@@ -30,29 +31,25 @@ WORKDIR /app
 # Copy Python packages from builder stage
 COPY --from=builder /root/.local /home/botuser/.local
 
-# Copy application code
+# Copy application code with proper ownership
 COPY --chown=botuser:botuser . .
 
 # Create temp directory with proper permissions
-RUN mkdir -p /app/temp && chown -R botuser:botuser /app/temp
+RUN mkdir -p /app/temp /app/logs && \
+    chown -R botuser:botuser /app/temp /app/logs
 
 # Switch to non-root user
 USER botuser
 
 # Add local Python packages to PATH
-ENV PATH=/home/botuser/.local/bin:$PATH
+ENV PATH=/home/botuser/.local/bin:$PATH \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    TEMP_DIR=/app/temp
 
-# Environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-ENV TEMP_DIR=/app/temp
-
-# Expose port (if needed for health checks)
-EXPOSE 8000
-
-# Health check
+# Simple health check without heavy dependencies
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import psutil; exit(0 if psutil.cpu_percent() < 100 else 1)" || exit 1
+    CMD python -c "import os; exit(0 if os.path.exists('/tmp/bot_healthy') else 1)" || exit 1
 
 # Run the bot
 CMD ["python", "run.py"]
