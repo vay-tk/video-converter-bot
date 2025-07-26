@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -129,7 +130,7 @@ async def handle_conversion(client: Client, callback_query: CallbackQuery):
         await callback_query.edit_message_text("❌ Conversion failed. Please try again.")
 
 async def process_conversion(client: Client, callback_query: CallbackQuery, message: Message, format_type: str):
-    """Process video conversion"""
+    """Process video conversion with proper progress tracking"""
     progress_message = None
     input_file = None
     output_file = None
@@ -142,7 +143,6 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
             percent = (current * 100) / total
             text = f"📥 **Downloading**: {percent:.1f}%"
             
-            # Only update if text changed and enough time passed
             if text != last_progress_text:
                 try:
                     if progress_message is None:
@@ -150,10 +150,11 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
                     else:
                         await progress_message.edit_text(text)
                     last_progress_text = text
-                except Exception:
-                    pass  # Ignore edit errors
+                except Exception as e:
+                    logger.debug(f"Download progress update error: {e}")
         
         # Download file
+        logger.info("Starting file download...")
         input_file = await file_manager.download_file(message, download_progress)
         if not input_file:
             await callback_query.edit_message_text("❌ Failed to download video.")
@@ -163,28 +164,32 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
         original_name = Path(input_file.name).stem
         output_file = file_manager.get_temp_path(f"{original_name}.{format_type}", "_output")
         
-        # Get video duration for progress tracking
-        duration = await converter.get_video_duration(input_file)
-        
-        # Conversion progress callback with ETA
+        # Conversion progress callback - THIS IS THE KEY PART
         async def conversion_progress(percent, current_seconds, eta_text):
-            nonlocal last_progress_text
+            nonlocal last_progress_text, progress_message
+            
+            # Format the progress text
             text = f"🔄 **Converting to {format_type.upper()}**: {percent:.1f}%{eta_text}"
             
-            # Only update if text changed significantly
+            logger.info(f"Progress callback called: {text}")  # Debug log
+            
+            # Only update if text changed
             if text != last_progress_text:
                 try:
                     await progress_message.edit_text(text)
                     last_progress_text = text
-                except Exception:
-                    pass  # Ignore MESSAGE_NOT_MODIFIED and other edit errors
+                    logger.info(f"Progress updated: {text}")
+                except Exception as e:
+                    logger.error(f"Progress update failed: {e}")
         
-        # Update status
-        initial_text = f"🔄 **Converting to {format_type.upper()}**..."
+        # Update initial conversion status
+        initial_text = f"🔄 **Converting to {format_type.upper()}**... (Getting video info)"
         await progress_message.edit_text(initial_text)
         last_progress_text = initial_text
         
-        # Convert video
+        logger.info(f"Starting {format_type} conversion...")
+        
+        # Convert video - MAKE SURE CALLBACK IS PASSED
         if format_type == "mp4":
             success = await converter.convert_to_mp4(input_file, output_file, conversion_progress)
         else:  # mkv
