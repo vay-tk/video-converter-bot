@@ -1,6 +1,6 @@
 
-import asyncio
 import logging
+import os
 from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,10 +10,15 @@ from config import Config
 from utils.file_manager import FileManager
 from utils.ffmpeg_converter import FFmpegConverter
 
-# Configure logging
+# Configure logging for Docker
+log_dir = os.getenv('LOG_DIR', '/app/logs')
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(f'{log_dir}/bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,14 @@ converter = FFmpegConverter(Config.FFMPEG_PATH)
 
 # User sessions to track conversion state
 user_sessions = {}
+
+# Custom filter for video documents
+def video_document_filter(_, __, message):
+    return (message.document and 
+            message.document.mime_type and 
+            message.document.mime_type.startswith('video/'))
+
+video_document = filters.create(video_document_filter)
 
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
@@ -38,8 +51,11 @@ async def start_command(client: Client, message: Message):
         "⚡ **Features**: Preserves audio/subtitles, fast conversion"
     )
     await message.reply_text(welcome_text)
+    
+    # Create health check file
+    Path('/tmp/bot_healthy').touch()
 
-@app.on_message(filters.video | (filters.document & filters.document.video))
+@app.on_message(filters.video | video_document)
 async def handle_video(client: Client, message: Message):
     """Handle incoming video files"""
     try:

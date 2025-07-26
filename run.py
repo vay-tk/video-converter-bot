@@ -1,16 +1,17 @@
-
 import asyncio
 import logging
 import signal
 import sys
+import os
 from pathlib import Path
 
-# Setup logging
+# Setup logging for Docker environment
+log_dir = os.getenv('LOG_DIR', '/app/logs')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot.log'),
+        logging.FileHandler(f'{log_dir}/bot.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -28,6 +29,9 @@ async def main():
         # Register signal handlers
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Create health check file
+        Path('/tmp/bot_healthy').touch()
         
         # Import and run bot
         from bot import app
