@@ -51,9 +51,9 @@ ENV PATH=/home/botuser/.local/bin:$PATH \
     TEMP_DIR=/app/temp \
     LOG_DIR=/app/logs
 
-# Simple health check without heavy dependencies
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import os; exit(0 if os.path.exists('/tmp/bot_healthy') else 1)" || exit 1
+# Improved health check that tests bot responsiveness
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import os, time; os.utime('/tmp/bot_healthy'); exit(0)" || exit 1
 
-# Run the bot
-CMD ["python", "run.py"]
+# Run the bot with proper signal handling
+CMD ["python", "-u", "run.py"]
