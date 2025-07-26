@@ -37,7 +37,9 @@ COPY . .
 # Create directories and set proper permissions
 RUN mkdir -p /app/temp /app/logs && \
     chown -R botuser:botuser /app && \
-    chmod -R 755 /app
+    chmod -R 755 /app && \
+    touch /tmp/bot_healthy && \
+    chmod 666 /tmp/bot_healthy
 
 # Switch to non-root user
 USER botuser
