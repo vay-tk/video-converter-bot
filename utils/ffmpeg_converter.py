@@ -1,4 +1,3 @@
-
 import asyncio
 import re
 import logging
@@ -30,6 +29,7 @@ class FFmpegConverter:
             "-map", "0:a:0?",  # First audio stream (optional)
             "-map", "0:s:0?",  # First subtitle stream (optional)
             "-movflags", "+faststart",
+            "-progress", "pipe:1",  # Send progress to stdout
             "-y",
             str(output_path)
         ]
@@ -55,6 +55,7 @@ class FFmpegConverter:
             "-map", "0:v:0",  # First video stream
             "-map", "0:a",    # All audio streams
             "-map", "0:s?",   # All subtitle streams (optional)
+            "-progress", "pipe:1",  # Send progress to stdout
             "-y",
             str(output_path)
         ]
@@ -74,13 +75,23 @@ class FFmpegConverter:
                 stderr=asyncio.subprocess.PIPE
             )
             
-            # Monitor progress if callback provided
+            # Monitor progress if callback provided - use stdout instead of stderr
+            progress_task = None
             if progress_callback:
-                asyncio.create_task(
-                    self._monitor_progress(process, progress_callback)
+                progress_task = asyncio.create_task(
+                    self._monitor_progress(process.stdout, progress_callback)
                 )
             
+            # Wait for process completion
             stdout, stderr = await process.communicate()
+            
+            # Cancel progress monitoring if it's still running
+            if progress_task and not progress_task.done():
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
             
             if process.returncode == 0:
                 logger.info("FFmpeg conversion successful")
@@ -95,27 +106,40 @@ class FFmpegConverter:
     
     async def _monitor_progress(
         self, 
-        process: asyncio.subprocess.Process,
+        stream: asyncio.StreamReader,
         callback: Callable
     ):
-        """Monitor FFmpeg progress output"""
+        """Monitor FFmpeg progress output from stdout"""
         try:
+            buffer = ""
             while True:
-                line = await process.stderr.readline()
-                if not line:
-                    break
-                
-                line = line.decode().strip()
-                
-                # Parse time progress from FFmpeg output
-                time_match = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line)
-                if time_match:
-                    hours, minutes, seconds = time_match.groups()
-                    current_seconds = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-                    await callback(current_seconds)
+                try:
+                    # Read with timeout to prevent hanging
+                    data = await asyncio.wait_for(stream.read(1024), timeout=1.0)
+                    if not data:
+                        break
+                    
+                    buffer += data.decode('utf-8', errors='ignore')
+                    lines = buffer.split('\n')
+                    buffer = lines[-1]  # Keep incomplete line
+                    
+                    for line in lines[:-1]:
+                        line = line.strip()
+                        if line.startswith('out_time_ms='):
+                            try:
+                                microseconds = int(line.split('=')[1])
+                                seconds = microseconds / 1000000
+                                await callback(seconds)
+                            except (ValueError, IndexError):
+                                pass
+                                
+                except asyncio.TimeoutError:
+                    continue  # Continue reading if no data available
+                except Exception:
+                    break  # Exit on any other error
                     
         except Exception as e:
-            logger.error(f"Progress monitoring error: {e}")
+            logger.debug(f"Progress monitoring stopped: {e}")
     
     async def get_video_duration(self, file_path: Path) -> Optional[float]:
         """Get video duration in seconds"""
