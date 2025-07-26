@@ -49,11 +49,12 @@ ENV PATH=/home/botuser/.local/bin:$PATH \
     PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     TEMP_DIR=/app/temp \
-    LOG_DIR=/app/logs
+    LOG_DIR=/app/logs \
+    FFMPEG_THREAD_QUEUE_SIZE=512
 
 # Improved health check that tests bot responsiveness
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import os, time; os.utime('/tmp/bot_healthy'); exit(0)" || exit 1
 
-# Run the bot with proper signal handling
+# Run the bot with proper signal handling and process isolation
 CMD ["python", "-u", "run.py"]
