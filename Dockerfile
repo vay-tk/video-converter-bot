@@ -31,12 +31,13 @@ WORKDIR /app
 # Copy Python packages from builder stage
 COPY --from=builder /root/.local /home/botuser/.local
 
-# Copy application code with proper ownership
-COPY --chown=botuser:botuser . .
+# Copy application code first (as root)
+COPY . .
 
-# Create temp directory with proper permissions
+# Create directories and set proper permissions
 RUN mkdir -p /app/temp /app/logs && \
-    chown -R botuser:botuser /app/temp /app/logs
+    chown -R botuser:botuser /app && \
+    chmod -R 755 /app
 
 # Switch to non-root user
 USER botuser
@@ -45,7 +46,8 @@ USER botuser
 ENV PATH=/home/botuser/.local/bin:$PATH \
     PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
-    TEMP_DIR=/app/temp
+    TEMP_DIR=/app/temp \
+    LOG_DIR=/app/logs
 
 # Simple health check without heavy dependencies
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
