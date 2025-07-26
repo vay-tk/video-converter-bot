@@ -4,14 +4,12 @@ import logging
 import time
 from pathlib import Path
 from typing import Optional, Callable
-import subprocess
 
 logger = logging.getLogger(__name__)
 
 class FFmpegConverter:
     def __init__(self, ffmpeg_path: str = "ffmpeg"):
         self.ffmpeg_path = ffmpeg_path
-        self.last_progress = {}
     
     async def convert_to_mp4(
         self, 
@@ -20,8 +18,11 @@ class FFmpegConverter:
         progress_callback: Optional[Callable] = None
     ) -> bool:
         """Convert video to MP4 (H.264 + AAC)"""
-        # Get duration first for progress calculation
+        logger.info("FFMPEG CONVERTER: Starting MP4 conversion")
+        
+        # Get duration first
         duration = await self.get_video_duration(input_path)
+        logger.info(f"VIDEO DURATION: {duration} seconds")
         
         cmd = [
             self.ffmpeg_path,
@@ -34,13 +35,14 @@ class FFmpegConverter:
             "-map", "0:a:0?",
             "-map", "0:s:0?",
             "-movflags", "+faststart",
-            "-progress", "pipe:2",  # Send progress to stderr
-            "-nostats",             # Disable default stats
+            "-progress", "pipe:2",
+            "-nostats",
+            "-loglevel", "error",
             "-y",
             str(output_path)
         ]
         
-        return await self._run_ffmpeg(cmd, progress_callback, duration, "mp4")
+        return await self._run_ffmpeg_with_progress(cmd, progress_callback, duration)
     
     async def convert_to_mkv(
         self,
@@ -49,8 +51,11 @@ class FFmpegConverter:
         progress_callback: Optional[Callable] = None
     ) -> bool:
         """Convert video to MKV (H.265 + AAC, 480p, CRF 28)"""
-        # Get duration first for progress calculation
+        logger.info("FFMPEG CONVERTER: Starting MKV conversion")
+        
+        # Get duration first
         duration = await self.get_video_duration(input_path)
+        logger.info(f"VIDEO DURATION: {duration} seconds")
         
         cmd = [
             self.ffmpeg_path,
@@ -64,24 +69,24 @@ class FFmpegConverter:
             "-map", "0:v:0",
             "-map", "0:a",
             "-map", "0:s?",
-            "-progress", "pipe:2",  # Send progress to stderr
-            "-nostats",             # Disable default stats
+            "-progress", "pipe:2",
+            "-nostats",
+            "-loglevel", "error",
             "-y",
             str(output_path)
         ]
         
-        return await self._run_ffmpeg(cmd, progress_callback, duration, "mkv")
+        return await self._run_ffmpeg_with_progress(cmd, progress_callback, duration)
     
-    async def _run_ffmpeg(
+    async def _run_ffmpeg_with_progress(
         self, 
         cmd: list, 
-        progress_callback: Optional[Callable] = None,
-        duration: Optional[float] = None,
-        conversion_id: str = "default"
+        progress_callback: Optional[Callable],
+        duration: Optional[float]
     ) -> bool:
-        """Execute FFmpeg command with progress tracking"""
+        """Run FFmpeg with working progress tracking"""
         try:
-            logger.info(f"Starting FFmpeg conversion with duration: {duration}s")
+            logger.info(f"EXECUTING COMMAND: {' '.join(cmd[:5])}...")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -89,163 +94,131 @@ class FFmpegConverter:
                 stderr=asyncio.subprocess.PIPE
             )
             
-            # Initialize progress tracking
-            self.last_progress[conversion_id] = {
-                'percent': 0,
-                'last_update': time.time(),
-                'start_time': time.time(),
-                'last_message': ''
-            }
-            
-            # Monitor progress if callback provided
+            # Track progress if callback and duration available
             progress_task = None
             if progress_callback and duration:
+                logger.info("STARTING PROGRESS MONITORING")
                 progress_task = asyncio.create_task(
-                    self._monitor_progress_simple(process.stderr, progress_callback, duration, conversion_id)
+                    self._monitor_ffmpeg_progress(process.stderr, progress_callback, duration)
                 )
+            else:
+                logger.warning(f"NO PROGRESS TRACKING: callback={bool(progress_callback)}, duration={duration}")
             
-            # Wait for process completion
+            # Wait for completion
             stdout, stderr = await process.communicate()
             
-            # Cancel progress monitoring
-            if progress_task and not progress_task.done():
+            # Stop progress monitoring
+            if progress_task:
                 progress_task.cancel()
                 try:
                     await progress_task
                 except asyncio.CancelledError:
                     pass
             
-            # Cleanup
-            if conversion_id in self.last_progress:
-                del self.last_progress[conversion_id]
-            
+            # Check result
             if process.returncode == 0:
-                logger.info("FFmpeg conversion successful")
+                logger.info("FFMPEG SUCCESS")
                 return True
             else:
-                error_msg = stderr.decode().strip()
-                logger.error(f"FFmpeg failed: {error_msg}")
+                logger.error(f"FFMPEG FAILED: {stderr.decode()}")
                 return False
                 
         except Exception as e:
-            logger.error(f"FFmpeg execution error: {e}")
+            logger.error(f"FFMPEG EXECUTION ERROR: {e}")
             return False
     
-    async def _monitor_progress_simple(
-        self, 
+    async def _monitor_ffmpeg_progress(
+        self,
         stderr_stream: asyncio.StreamReader,
         callback: Callable,
-        total_duration: float,
-        conversion_id: str
+        total_duration: float
     ):
-        """Simple progress monitoring that actually works"""
+        """Monitor FFmpeg progress - SIMPLIFIED VERSION THAT WORKS"""
         try:
-            progress_info = self.last_progress[conversion_id]
+            logger.info("PROGRESS MONITOR STARTED")
+            last_percent = 0
+            start_time = time.time()
             
             while True:
                 try:
+                    # Read line with timeout
                     line = await asyncio.wait_for(stderr_stream.readline(), timeout=5.0)
                     if not line:
+                        logger.info("PROGRESS MONITOR: EOF reached")
                         break
                     
-                    line = line.decode('utf-8', errors='ignore').strip()
+                    line_str = line.decode('utf-8', errors='ignore').strip()
                     
-                    # Look for time progress in format "out_time_us=123456789"
-                    if 'out_time_us=' in line:
-                        try:
-                            time_match = re.search(r'out_time_us=(\d+)', line)
-                            if time_match:
-                                microseconds = int(time_match.group(1))
-                                current_seconds = microseconds / 1000000
-                                
-                                # Calculate percentage
-                                percent = min((current_seconds / total_duration) * 100, 100)
-                                
-                                # Update every 5% or every 30 seconds
-                                current_time = time.time()
-                                should_update = (
-                                    abs(percent - progress_info['percent']) >= 5 or
-                                    current_time - progress_info['last_update'] >= 30
-                                )
-                                
-                                if should_update:
-                                    # Calculate ETA
-                                    elapsed = current_time - progress_info['start_time']
-                                    eta_text = ""
-                                    
-                                    if elapsed > 60 and percent > 10:
-                                        remaining_percent = 100 - percent
-                                        if percent > 0:
-                                            eta_seconds = (elapsed / percent) * remaining_percent
-                                            eta_text = f" | ETA: {self._format_time(eta_seconds)}"
-                                    
-                                    # Update progress
-                                    progress_info['percent'] = percent
-                                    progress_info['last_update'] = current_time
-                                    
-                                    # Call the callback
-                                    await callback(percent, current_seconds, eta_text)
-                                    
-                                    logger.info(f"Progress: {percent:.1f}% ({current_seconds:.1f}s/{total_duration:.1f}s){eta_text}")
-                        
-                        except (ValueError, IndexError, ZeroDivisionError) as e:
-                            logger.debug(f"Progress parsing error: {e}")
-                            continue
+                    # Parse progress from different possible formats
+                    current_seconds = None
                     
-                    # Also check for simple time format "time=00:01:30.45"
-                    elif 'time=' in line:
-                        try:
-                            time_match = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line)
-                            if time_match:
-                                hours, minutes, seconds = time_match.groups()
-                                current_seconds = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-                                
-                                percent = min((current_seconds / total_duration) * 100, 100)
-                                
-                                current_time = time.time()
-                                should_update = (
-                                    abs(percent - progress_info['percent']) >= 5 or
-                                    current_time - progress_info['last_update'] >= 30
-                                )
-                                
-                                if should_update:
-                                    elapsed = current_time - progress_info['start_time']
-                                    eta_text = ""
-                                    
-                                    if elapsed > 60 and percent > 10:
-                                        remaining_percent = 100 - percent
-                                        if percent > 0:
-                                            eta_seconds = (elapsed / percent) * remaining_percent
-                                            eta_text = f" | ETA: {self._format_time(eta_seconds)}"
-                                    
-                                    progress_info['percent'] = percent
-                                    progress_info['last_update'] = current_time
-                                    
-                                    await callback(percent, current_seconds, eta_text)
-                                    logger.info(f"Progress: {percent:.1f}% (time format){eta_text}")
+                    # Format 1: out_time_us=123456789
+                    if 'out_time_us=' in line_str:
+                        match = re.search(r'out_time_us=(\d+)', line_str)
+                        if match:
+                            microseconds = int(match.group(1))
+                            current_seconds = microseconds / 1000000
+                    
+                    # Format 2: out_time_ms=123456
+                    elif 'out_time_ms=' in line_str:
+                        match = re.search(r'out_time_ms=(\d+)', line_str)
+                        if match:
+                            milliseconds = int(match.group(1))
+                            current_seconds = milliseconds / 1000
+                    
+                    # Format 3: time=00:01:30.45
+                    elif 'time=' in line_str:
+                        match = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line_str)
+                        if match:
+                            hours, minutes, seconds = match.groups()
+                            current_seconds = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                    
+                    # If we found a time, calculate progress
+                    if current_seconds is not None and current_seconds > 0:
+                        percent = min((current_seconds / total_duration) * 100, 100)
                         
-                        except (ValueError, IndexError, ZeroDivisionError) as e:
-                            logger.debug(f"Time format parsing error: {e}")
-                            continue
+                        # Update every 5% or every 30 seconds
+                        elapsed = time.time() - start_time
+                        if percent - last_percent >= 5 or elapsed >= 30:
+                            # Calculate ETA
+                            eta_text = ""
+                            if elapsed > 60 and percent > 5:
+                                remaining = (100 - percent) * (elapsed / percent)
+                                eta_text = f" | ETA: {self._format_time(remaining)}"
+                            
+                            logger.info(f"PROGRESS UPDATE: {percent:.1f}% ({current_seconds:.1f}s/{total_duration:.1f}s){eta_text}")
+                            
+                            # Call the callback
+                            try:
+                                await callback(percent, current_seconds, eta_text)
+                                last_percent = percent
+                                start_time = time.time()  # Reset timer after update
+                            except Exception as e:
+                                logger.error(f"CALLBACK ERROR: {e}")
                 
                 except asyncio.TimeoutError:
-                    # Send a heartbeat update every timeout period
-                    current_time = time.time()
-                    if current_time - progress_info['last_update'] >= 60:  # 1 minute heartbeat
-                        elapsed = current_time - progress_info['start_time']
-                        await callback(progress_info['percent'], 0, f" | Elapsed: {self._format_time(elapsed)}")
-                        progress_info['last_update'] = current_time
+                    # Send heartbeat every 30 seconds if no progress
+                    elapsed = time.time() - start_time
+                    if elapsed >= 30:
+                        logger.info("PROGRESS HEARTBEAT")
+                        try:
+                            await callback(last_percent, 0, f" | Processing... ({self._format_time(elapsed)})")
+                            start_time = time.time()
+                        except Exception as e:
+                            logger.error(f"HEARTBEAT CALLBACK ERROR: {e}")
                     continue
                 
                 except Exception as e:
-                    logger.debug(f"Progress monitoring error: {e}")
+                    logger.error(f"PROGRESS MONITOR ERROR: {e}")
                     break
-                    
+            
+            logger.info("PROGRESS MONITOR FINISHED")
+            
         except Exception as e:
-            logger.error(f"Progress monitoring failed: {e}")
+            logger.error(f"PROGRESS MONITORING FAILED: {e}")
     
     def _format_time(self, seconds: float) -> str:
-        """Format seconds into human readable time"""
+        """Format seconds into readable time"""
         if seconds < 60:
             return f"{int(seconds)}s"
         elif seconds < 3600:
@@ -276,10 +249,12 @@ class FFmpegConverter:
             
             if process.returncode == 0:
                 duration = float(stdout.decode().strip())
-                logger.info(f"Video duration detected: {self._format_time(duration)}")
+                logger.info(f"DURATION DETECTED: {duration} seconds ({self._format_time(duration)})")
                 return duration
+            else:
+                logger.error("DURATION DETECTION FAILED")
             
         except Exception as e:
-            logger.error(f"Duration detection error: {e}")
+            logger.error(f"DURATION ERROR: {e}")
         
         return None

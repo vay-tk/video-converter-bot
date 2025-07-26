@@ -164,36 +164,41 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
         original_name = Path(input_file.name).stem
         output_file = file_manager.get_temp_path(f"{original_name}.{format_type}", "_output")
         
-        # Conversion progress callback - THIS IS THE KEY PART
+        # Conversion progress callback - WITH MORE DEBUG LOGGING
         async def conversion_progress(percent, current_seconds, eta_text):
             nonlocal last_progress_text, progress_message
             
             # Format the progress text
             text = f"🔄 **Converting to {format_type.upper()}**: {percent:.1f}%{eta_text}"
             
-            logger.info(f"Progress callback called: {text}")  # Debug log
+            logger.info(f"PROGRESS CALLBACK TRIGGERED: {percent}% - {text}")  # Enhanced debug log
             
-            # Only update if text changed
-            if text != last_progress_text:
+            # Only update if text changed significantly (more than 1% difference)
+            if abs(percent - float(last_progress_text.split(':')[1].split('%')[0] if ':' in last_progress_text and '%' in last_progress_text else 0)) >= 1:
                 try:
                     await progress_message.edit_text(text)
                     last_progress_text = text
-                    logger.info(f"Progress updated: {text}")
+                    logger.info(f"MESSAGE UPDATED: {text}")
                 except Exception as e:
                     logger.error(f"Progress update failed: {e}")
         
         # Update initial conversion status
-        initial_text = f"🔄 **Converting to {format_type.upper()}**... (Getting video info)"
+        initial_text = f"🔄 **Converting to {format_type.upper()}**... (Analyzing video)"
         await progress_message.edit_text(initial_text)
         last_progress_text = initial_text
         
-        logger.info(f"Starting {format_type} conversion...")
+        logger.info(f"STARTING CONVERSION: {format_type}")
+        logger.info(f"INPUT FILE: {input_file}")
+        logger.info(f"OUTPUT FILE: {output_file}")
         
-        # Convert video - MAKE SURE CALLBACK IS PASSED
+        # Convert video - ENSURE CALLBACK IS DEFINITELY PASSED
+        logger.info("CALLING CONVERTER WITH PROGRESS CALLBACK")
         if format_type == "mp4":
             success = await converter.convert_to_mp4(input_file, output_file, conversion_progress)
         else:  # mkv
             success = await converter.convert_to_mkv(input_file, output_file, conversion_progress)
+        
+        logger.info(f"CONVERSION COMPLETED: success={success}")
         
         if not success:
             await progress_message.edit_text("❌ Conversion failed.")
