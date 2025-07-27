@@ -29,7 +29,7 @@ class FFmpegConverter:
             "-i", str(input_path),
             "-c:v", "libx264",
             "-c:a", "aac",
-            "-preset", "medium",
+            "-preset", "slow",
             "-crf", "23",
             "-map", "0:v:0",  # First video stream
             "-map", "0:a:0?", # First audio stream (optional)
@@ -62,10 +62,10 @@ class FFmpegConverter:
             "-i", str(input_path),
             "-c:v", "libx265",
             "-crf", "28",
-            "-preset", "medium",
+            "-preset", "slow",
             "-vf", "scale=-2:480",  # Resize to 480p
             "-c:a", "aac",
-            "-b:a", "96k",
+            "-b:a", "56k",
             "-map", "0:v:0",  # First video stream
             "-map", "0:a",    # All audio streams
             # Copy subtitle streams without encoding to avoid conversion issues
