@@ -3,6 +3,7 @@ import os
 import asyncio
 import aiofiles
 import time
+import re
 from pathlib import Path
 from typing import Optional
 import logging
@@ -14,10 +15,34 @@ class FileManager:
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(exist_ok=True)
     
+    def sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename to remove invalid characters"""
+        # Remove or replace invalid characters for file systems
+        sanitized = re.sub(r'[<>:"/\\|?*\[\]]', '_', filename)
+        # Remove multiple underscores
+        sanitized = re.sub(r'_+', '_', sanitized)
+        # Remove leading/trailing dots and spaces
+        sanitized = sanitized.strip(' .')
+        # Limit length to prevent path too long errors
+        if len(sanitized) > 200:
+            name_part = sanitized[:190]
+            ext_part = sanitized[-10:] if '.' in sanitized[-10:] else ''
+            sanitized = name_part + ext_part
+        
+        return sanitized if sanitized else "video"
+    
     def get_temp_path(self, filename: str, suffix: str = "") -> Path:
-        """Generate unique temporary file path"""
-        base_name = Path(filename).stem
-        extension = Path(filename).suffix
+        """Generate unique temporary file path with sanitized filename"""
+        # Sanitize the filename first
+        clean_filename = self.sanitize_filename(filename)
+        
+        base_name = Path(clean_filename).stem
+        extension = Path(clean_filename).suffix
+        
+        # Ensure we have an extension
+        if not extension:
+            extension = ".mp4"  # Default extension
+        
         temp_filename = f"{base_name}{suffix}{extension}"
         return self.temp_dir / temp_filename
     
