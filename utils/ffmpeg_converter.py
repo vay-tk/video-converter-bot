@@ -135,20 +135,19 @@ class FFmpegConverter:
         callback: Callable,
         total_duration: float
     ):
-        """Fixed progress monitoring without concurrent read issues"""
+        """Enhanced progress monitoring with frequent updates"""
         try:
             logger.info("PROGRESS MONITOR STARTED")
-            last_percent = 0
-            start_time = time.time()
+            last_percent = -1
+            last_callback_time = time.time()
             buffer = ""
             
-            # Read stderr in chunks to avoid concurrent access
             while process.returncode is None:
                 try:
-                    # Read available data without blocking
+                    # Read available data with shorter timeout for more frequent updates
                     chunk = await asyncio.wait_for(
                         process.stderr.read(1024), 
-                        timeout=2.0
+                        timeout=1.0  # Reduced timeout for more frequent checks
                     )
                     
                     if not chunk:
@@ -169,32 +168,49 @@ class FFmpegConverter:
                         
                         if current_seconds is not None and current_seconds > 0:
                             percent = min((current_seconds / total_duration) * 100, 100)
+                            current_time = time.time()
                             
-                            # Update every 5% or every 30 seconds
-                            elapsed = time.time() - start_time
-                            if percent - last_percent >= 5 or elapsed >= 30:
+                            # Update every 2% OR every 5 seconds for more frequent updates
+                            should_update = (
+                                abs(percent - last_percent) >= 2 or 
+                                current_time - last_callback_time >= 5
+                            )
+                            
+                            if should_update:
                                 # Calculate ETA
+                                elapsed = current_time - last_callback_time
                                 eta_text = ""
-                                if elapsed > 60 and percent > 5:
-                                    remaining = (100 - percent) * (elapsed / percent)
+                                if elapsed > 30 and percent > 5:
+                                    remaining = (100 - percent) * (elapsed / max(percent - last_percent, 0.1))
                                     eta_text = f" | ETA: {self._format_time(remaining)}"
                                 
-                                logger.info(f"PROGRESS: {percent:.1f}% ({current_seconds:.1f}s/{total_duration:.1f}s)")
+                                # Log to console for debugging
+                                logger.info(f"FFMPEG PROGRESS: {percent:.1f}% ({current_seconds:.1f}s/{total_duration:.1f}s){eta_text}")
                                 
                                 try:
                                     await callback(percent, current_seconds, eta_text)
                                     last_percent = percent
-                                    start_time = time.time()
+                                    last_callback_time = current_time
+                                    
+                                    # Print to stdout as well for immediate visibility
+                                    print(f"🔄 Converting: {percent:.1f}% ({current_seconds:.0f}s/{total_duration:.0f}s){eta_text}")
+                                    
                                 except Exception as e:
                                     logger.error(f"CALLBACK ERROR: {e}")
                 
                 except asyncio.TimeoutError:
-                    # Send heartbeat if no progress for a while
-                    elapsed = time.time() - start_time
-                    if elapsed >= 60:  # 1 minute heartbeat
+                    # Send heartbeat every 10 seconds even without progress updates
+                    current_time = time.time()
+                    if current_time - last_callback_time >= 10:
+                        elapsed_total = current_time - last_callback_time
+                        heartbeat_msg = f" | Still processing... ({self._format_time(elapsed_total)} elapsed)"
+                        
+                        logger.info(f"FFMPEG HEARTBEAT: {last_percent:.1f}%{heartbeat_msg}")
+                        print(f"🔄 Converting: {last_percent:.1f}%{heartbeat_msg}")
+                        
                         try:
-                            await callback(last_percent, 0, f" | Processing... ({self._format_time(elapsed)})")
-                            start_time = time.time()
+                            await callback(last_percent, 0, heartbeat_msg)
+                            last_callback_time = current_time
                         except Exception as e:
                             logger.error(f"HEARTBEAT ERROR: {e}")
                     continue
@@ -203,10 +219,20 @@ class FFmpegConverter:
                     logger.error(f"PROGRESS READ ERROR: {e}")
                     break
             
+            # Final update when conversion completes
+            if process.returncode == 0:
+                logger.info("FFMPEG CONVERSION COMPLETED SUCCESSFULLY")
+                print("✅ Conversion completed successfully!")
+                try:
+                    await callback(100.0, total_duration, " | Complete!")
+                except Exception as e:
+                    logger.error(f"FINAL CALLBACK ERROR: {e}")
+            
             logger.info("PROGRESS MONITOR FINISHED")
             
         except Exception as e:
             logger.error(f"PROGRESS MONITORING FAILED: {e}")
+            print(f"❌ Progress monitoring error: {e}")
     
     def _parse_progress_line(self, line: str) -> Optional[float]:
         """Parse a single progress line and return current seconds"""

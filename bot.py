@@ -202,10 +202,14 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
             current_time = time.time()
             text = f"🔄 **Converting to {format_type.upper()}**: {percent:.1f}%{eta_text}"
             
-            # Update every 5% or every 30 seconds for conversion
+            # More frequent console logging for debugging
+            logger.info(f"CONVERSION PROGRESS: {percent:.1f}% - {text}")
+            print(f"Bot Progress: {percent:.1f}%{eta_text}")  # Direct console output
+            
+            # Update Telegram message every 5% or every 20 seconds for conversion
             should_update = (
                 abs(percent - (float(last_progress_text.split(': ')[1].split('%')[0]) if ': ' in last_progress_text and '%' in last_progress_text else 0)) >= 5 or
-                current_time - last_update_time >= 30
+                current_time - last_update_time >= 20
             )
             
             if should_update and text != last_progress_text:
@@ -213,7 +217,7 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
                     await progress_message.edit_text(text)
                     last_progress_text = text
                     last_update_time = current_time
-                    logger.info(f"Conversion progress: {percent:.1f}%")
+                    logger.info(f"TELEGRAM MESSAGE UPDATED: {percent:.1f}%")
                     
                 except FloodWait as e:
                     logger.warning(f"Conversion progress flood wait: {e.value}s")
@@ -224,15 +228,18 @@ async def process_conversion(client: Client, callback_query: CallbackQuery, mess
                 except Exception as e:
                     logger.error(f"Progress update failed: {e}")
         
-        # Update initial conversion status
-        initial_text = f"🔄 **Converting to {format_type.upper()}**... (Analyzing video)"
+        # Update initial conversion status with more detail
+        initial_text = f"🔄 **Converting to {format_type.upper()}**... (Starting FFmpeg process)"
         await safe_edit_message(progress_message, initial_text)
         last_progress_text = initial_text
         last_update_time = time.time()
         
-        logger.info(f"STARTING CONVERSION: {format_type}")
+        logger.info(f"=== STARTING {format_type.upper()} CONVERSION ===")
         logger.info(f"INPUT FILE: {input_file}")
         logger.info(f"OUTPUT FILE: {output_file}")
+        print(f"🎬 Starting {format_type.upper()} conversion...")
+        print(f"📁 Input: {input_file.name}")
+        print(f"📁 Output: {output_file.name}")
         
         # Convert video
         logger.info("CALLING CONVERTER WITH PROGRESS CALLBACK")
