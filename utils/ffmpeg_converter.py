@@ -61,7 +61,7 @@ class FFmpegConverter:
             self.ffmpeg_path,
             "-i", str(input_path),
             "-c:v", "libx265",
-            "-crf", "28",
+            "-crf", "32",
             "-preset", "slow",
             "-vf", "scale=-2:480",  # Resize to 480p
             "-c:a", "aac",
